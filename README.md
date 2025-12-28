@@ -1,45 +1,67 @@
 # F1 Race Engineer AI (FastAPI + Groq)
 
-Microservicio en Python con FastAPI que recibe telemetría procesada (OpenF1 vía tu backend NestJS) y devuelve un análisis estratégico en JSON usando Groq (modelo `llama-3.1-8b-instant`).
+A Python microservice that ingests processed F1 telemetry JSON (from your NestJS backend) and returns a strictly-JSON strategic race analysis using Groq (`llama-3.1-8b-instant`).
 
-## Estructura
+## Technologies
+- FastAPI — HTTP server + OpenAPI/Swagger UI
+- Uvicorn — ASGI server
+- Pydantic — Input/output validation
+- Groq — LLM inference
+- python-dotenv — Environment variables via `.env`
+- (Optional) Pandas — future data helpers
 
-- app/main.py — App FastAPI y endpoint `/analyze`.
-- app/services/ai_service.py — Llamada a Groq + validación estricta de JSON.
-- app/schemas/telemetry.py — Esquemas Pydantic de entrada y salida.
-- requirements.txt — Dependencias.
-
-## Variables de entorno
-
-- `GROQ_API_KEY` — API key de Groq.
-
-Puedes usar un archivo `.env` en la raíz del proyecto:
-
-```
-GROQ_API_KEY=tu_api_key
-```
-
-Ejemplo: mira [.env.example](.env.example).
-
-## Instalar y ejecutar
+## Environment
+- Set `GROQ_API_KEY` in `.env` (recommended) or export it.
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-# Opción A: usar .env (recomendado)
-cp .env.example .env  # edita el valor
-# Opción B: exportar variable de entorno
-# export GROQ_API_KEY=tu_api_key
+cp .env.example .env  # edit GROQ_API_KEY
 uvicorn app.main:app --reload --port 8080
 ```
 
-Healthcheck: http://localhost:8080/health
+- Health: http://localhost:8080/health
+- Swagger: http://localhost:8080/docs
+- OpenAPI JSON: http://localhost:8080/openapi.json
+- Redoc: http://localhost:8080/redoc
 
-## Uso
+## Input JSON Format (No Errors)
+The service is robust to missing fields and `null` values — they are treated as sensor anomalies rather than blocking analysis. To avoid validation issues, use the following shapes:
 
-POST `/analyze` con el JSON de telemetría. La respuesta devuelve únicamente análisis (sin sugerencias de gráficos):
+- `raceSummary` (object):
+  - `totalLaps` (int, optional)
+  - `totalStops` or `totalPitStops` (int, optional)
+  - `compounds` (object of counts, optional) or `compoundsUsed` (array of strings)
 
+- `pitStops` (array, optional but preferred):
+  - Each item: `{ lapNumber: int, duration?: number, totalDuration?: number }`
+  - This is treated as source of truth for pit-stop detection.
+
+- `telemetry` (array of objects): each lap may include:
+  - `lapNumber` (int, required)
+  - `lapDuration` (number, optional)
+  - Either `sectors` (object) with keys `s1`, `s2`, `s3`; or any of `sector1`, `sector2`, `sector3` (numbers or null). The service normalizes these into `sectors`.
+  - `tireCompound` (string, optional)
+  - `pitStop` (bool | int | object, optional)
+  - `weather` (object or null, optional). Known keys include `trackTemperature` or `trackTemp`, plus any additional fields.
+
+### Example Payload
+```json
+{
+  "raceSummary": { "totalLaps": 58, "totalPitStops": 1, "compoundsUsed": ["MEDIUM", "HARD"] },
+  "pitStops": [ { "lapNumber": 23, "duration": 21.7 } ],
+  "telemetry": [
+    { "lapNumber": 1, "sector2": 38.489, "sector3": 32.363, "tireCompound": "MEDIUM" },
+    { "lapNumber": 2, "lapDuration": 89.117, "sector1": 18.085, "sector2": 38.383, "sector3": 32.649, "tireCompound": "MEDIUM", "weather": { "trackTemperature": 31.4 } },
+    { "lapNumber": 23, "lapDuration": 91.365, "sector1": 17.903, "sector2": 38.59, "sector3": 34.872, "tireCompound": "MEDIUM" },
+    { "lapNumber": 24, "lapDuration": 108.923, "sector1": 38.129, "sector2": 38.518, "sector3": 32.276, "tireCompound": "HARD" }
+  ]
+}
+```
+
+## Output JSON Schema
+The service returns strict JSON:
 ```json
 {
   "summary": "...",
@@ -50,43 +72,18 @@ POST `/analyze` con el JSON de telemetría. La respuesta devuelve únicamente an
   }
 }
 ```
+- No charts are included for token savings.
+- Missing inputs are acknowledged as sensor anomalies but do not block analysis.
 
-El servicio identifica valores `null` como "anomalías de sensores" y los incorpora al análisis.
-
-## Probar con Postman
-
-1. Arranca el servidor:
-
+## Testing
+- Postman: import the collection at `postman/F1-IA-Engineer.postman_collection.json` and environment `postman/F1-IA-Engineer.local.postman_environment.json`.
+- Curl example:
 ```bash
-uvicorn app.main:app --reload --port 8080
+curl -X POST http://localhost:8080/analyze \
+  -H 'Content-Type: application/json' \
+  -d @payload.json
 ```
 
-2. En Postman, crea una petición `POST` a `http://localhost:8080/analyze`.
-- Header: `Content-Type: application/json`
-- Body (raw, JSON):
-
-```json
-{
-  "raceSummary": { "totalLaps": 58, "totalStops": 2, "compounds": {"C2": 30, "C3": 28} },
-  "telemetry": [
-    {
-      "lapNumber": 1,
-      "lapDuration": 92.315,
-      "sectors": {"s1": 28.1, "s2": 31.0, "s3": 33.2},
-      "tireCompound": "C3",
-      "pitStop": 0,
-      "weather": {"trackTemp": 41.2, "airTemp": 28.0, "rain": false}
-    },
-    {
-      "lapNumber": 2,
-      "lapDuration": null,
-      "sectors": {"s1": null, "s2": 31.2, "s3": 33.0},
-      "tireCompound": "C3",
-      "pitStop": 0,
-      "weather": {"trackTemp": 41.0, "airTemp": 28.1, "rain": false}
-    }
-  ]
-}
-```
-
-3. Asegúrate de tener `GROQ_API_KEY` configurada (en `.env` o exportada). Si hay problemas, revisa el endpoint `/health`.
+## Notes
+- The prompt is optimized to be decisive with partial data, prioritize `pitStops`, detect stints, and provide actionable recommendations.
+- Sector data is normalized to `sectors` to improve consistency analysis.
