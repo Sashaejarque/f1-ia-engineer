@@ -1,0 +1,31 @@
+# OS/macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Environments
+.venv/
+venv/
+env/
+
+# Env files (keep example tracked)
+.env
+.env.*
+!.env.example
+
+# Editors/IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
+logs/
