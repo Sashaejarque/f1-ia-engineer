@@ -1,10 +1,11 @@
 import os
-from fastapi import FastAPI, HTTPException, Body
+from fastapi import FastAPI, HTTPException, Body, Depends
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 
 from app.schemas.telemetry import TelemetryInput, AIOutput
 from app.services.ai_service import analyze_telemetry
+from app.dependencies import verify_internal_secret
 
 
 load_dotenv()  # Load variables from .env if present
@@ -51,7 +52,8 @@ async def analyze(
                 }
             }
         }
-    )
+    ),
+    _: str = Depends(verify_internal_secret)
 ):
     try:
         result = analyze_telemetry(payload)
