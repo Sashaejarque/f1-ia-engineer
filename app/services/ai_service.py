@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Optional
 import math
 
 from groq import Groq
@@ -10,22 +10,10 @@ from app.schemas.telemetry import AIOutput, TelemetryInput
 
 
 SYSTEM_PROMPT = (
-    "Eres el Jefe de Estrategia de un equipo de F1. "
-    "Sé concluyente y específico aunque falte información parcial: usa lo disponible, evita frases como 'no se puede evaluar'. "
-    "Produce insights técnicos sobre degradación térmica, ventanas de pit stop, consistencia de sectores e impacto del clima en el ritmo. "
-    "Si faltan datos, aplica criterios de ingeniería (inferencias razonables, outliers, interpolación simple) y continúa el análisis. "
-    "Si el campo 'pitStops' está presente, úsalo como fuente de verdad: indica las vueltas y duración de las paradas. "
-    "Si hay discrepancia entre 'pitStops' y el resto de la telemetría, prioriza 'pitStops' y explica la discrepancia brevemente. "
-    "Responde exclusivamente con un JSON válido que respete exactamente este esquema (sin sugerencias de gráficos): "
-    "{\n"
-    "  \"summary\": string,\n"
-    "  \"key_findings\": [ { \"topic\": string, \"description\": string, \"severity\": \"low|med|high\" } ],\n"
-    "  \"strategic_report\": {\n"
-    "    \"race_narrative\": string,\n"
-    "    \"next_race_projections\": string\n"
-    "  }\n"
-    "}\n"
-    "No incluyas texto fuera del JSON ni comentarios. No incluyas claves de gráficos."
+    "Role: F1 Strategy Chief. Be specific, use available data (avoid 'cannot evaluate'). Provide technical insights on thermal degradation, pit windows, sector consistency, weather impact. "
+    "If pitStops present, treat as truth (lap numbers & durations). "
+    "Apply engineering inference for gaps; avoid conjecture. "
+    "Output ONLY valid JSON: {\"summary\":string, \"key_findings\":[{\"topic\":string, \"description\":string, \"severity\":\"low|med|high\"}], \"strategic_report\":{\"race_narrative\":string, \"next_race_projections\":string}}"
 )
 
 
@@ -155,6 +143,93 @@ def _extract_track_temp(lap: Any) -> Any:
     return None
 
 
+def _abbrev_compound(compound: Optional[str]) -> str:
+    """Abbreviate tire compound to first capital letter."""
+    if compound is None:
+        return "-"
+    upper = compound.upper()
+    if upper in ("MEDIUM", "MED"):
+        return "M"
+    elif upper in ("HARD",):
+        return "H"
+    elif upper in ("SOFT",):
+        return "S"
+    elif upper.startswith("I"):
+        return "I"  # Intermediate
+    else:
+        return upper[0] if upper else "-"
+
+
+def _telemetry_to_csv(data: TelemetryInput) -> str:
+    """
+    Transform telemetry data into optimized CSV format for token efficiency.
+    
+    Columns: L (Lap), T (Time), S1, S2, S3, C (Compound), Tmp (Track Temp)
+    
+    Rules:
+    - Times rounded to 2 decimals
+    - Compounds abbreviated to first capital letter
+    - Nulls represented as "-"
+    - Track temp shown only on first lap or when delta > 0.5°C
+    """
+    if not data.telemetry:
+        return "L,T,S1,S2,S3,C,Tmp"
+    
+    lines = ["L,T,S1,S2,S3,C,Tmp"]
+    last_temp: Optional[float] = None
+    
+    for lap in data.telemetry:
+        lap_num = getattr(lap, "lapNumber", None)
+        lap_dur = getattr(lap, "lapDuration", None)
+        sectors = getattr(lap, "sectors", None) or {}
+        compound = getattr(lap, "tireCompound", None)
+        
+        # Format lap number
+        l_val = str(lap_num) if lap_num is not None else "-"
+        
+        # Format lap duration (time)
+        if isinstance(lap_dur, (int, float)):
+            t_val = f"{lap_dur:.2f}"
+        else:
+            t_val = "-"
+        
+        # Format sectors
+        s1_val = f"{sectors.get('s1'):.2f}" if isinstance(sectors.get("s1"), (int, float)) else "-"
+        s2_val = f"{sectors.get('s2'):.2f}" if isinstance(sectors.get("s2"), (int, float)) else "-"
+        s3_val = f"{sectors.get('s3'):.2f}" if isinstance(sectors.get("s3"), (int, float)) else "-"
+        
+        # Format compound
+        c_val = _abbrev_compound(compound)
+        
+        # Smart temperature logic
+        curr_temp = _extract_track_temp(lap)
+        tmp_val = ""
+        
+        if curr_temp is not None and isinstance(curr_temp, (int, float)):
+            curr_temp_f = float(curr_temp)
+            # Show on first lap
+            if lap_num == 1:
+                tmp_val = str(curr_temp_f)
+                last_temp = curr_temp_f
+            # Show if change > 0.5°C
+            elif last_temp is not None and abs(curr_temp_f - last_temp) > 0.5:
+                tmp_val = str(curr_temp_f)
+                last_temp = curr_temp_f
+            # Otherwise, empty (or use quote to indicate "no change")
+            else:
+                tmp_val = '"'
+                if last_temp is None:
+                    last_temp = curr_temp_f
+        else:
+            tmp_val = '"'
+        
+        # Build CSV row
+        row = f"{l_val},{t_val},{s1_val},{s2_val},{s3_val},{c_val},{tmp_val}"
+        lines.append(row)
+    
+    return "\n".join(lines)
+
+
 def _stint_summaries(data: TelemetryInput, derived: Dict[str, Any]) -> List[Dict[str, Any]]:
     # Build map lapNumber -> lap for ordering
     laps = sorted(list(data.telemetry), key=lambda l: getattr(l, "lapNumber", 0))
@@ -228,78 +303,28 @@ def _stint_summaries(data: TelemetryInput, derived: Dict[str, Any]) -> List[Dict
 
 def _build_user_prompt(data: TelemetryInput) -> str:
     total_laps = len(data.telemetry)
-    # Support both totalStops and totalPitStops
     total_stops = (
         getattr(data.raceSummary, "totalStops", None)
         if hasattr(data.raceSummary, "totalStops")
         else getattr(data.raceSummary, "totalPitStops", None)
     )
-    # Support both compounds dict and compoundsUsed list
     compounds = getattr(data.raceSummary, "compounds", None)
     compounds_used = getattr(data.raceSummary, "compoundsUsed", None)
 
     anomalies_count, samples = _scan_anomalies(data)
     derived = _derived_stats(data)
+    
+    # Compact header with critical info
+    pit_laps_str = str(derived['pit_stop_laps']) if derived['pit_stop_laps'] else "none"
+    compounds_list = list(compounds.keys()) if isinstance(compounds, dict) else (compounds_used if isinstance(compounds_used, list) else compounds)
+    
+    header = f"Context: {total_laps} laps, Stops: {derived['pit_stop_count_detected']} (truth: {pit_laps_str}), Compounds: {compounds_list}, Anomalies: {anomalies_count}"
 
-    lines = [
-        "Contexto de la telemetría:",
-        f"- Vueltas recibidas: {total_laps}",
-        f"- Paradas reportadas (resumen): {total_stops}",
-        f"- Paradas provistas (pitStops): {derived['pit_stop_count_detected']} en vueltas {derived['pit_stop_laps']}",
-        f"- Compuestos: {list(compounds.keys()) if isinstance(compounds, dict) else (compounds_used if isinstance(compounds_used, list) else compounds)}",
-        f"- Anomalías de sensores detectadas (valores null): {anomalies_count}",
-    ]
-    if samples:
-        lines.append(f"  Ejemplos: {', '.join(samples)}")
+    # Generate CSV
+    csv_data = _telemetry_to_csv(data)
+    csv_header = "Data (CSV): Lap,Time,S1,S2,S3,C(M/H/S/I),Tmp(=same)"
 
-    # Stints summary
-    stints = _stint_summaries(data, derived)
-    if stints:
-        pretty = []
-        for s in stints:
-            avg = f"{s['avgLap']:.3f}s" if isinstance(s.get('avgLap'), (int, float)) else "n/d"
-            slope = s.get('slopeSecPerLap') or 0.0
-            slope_txt = ("+" if slope >= 0 else "") + f"{slope:.3f}s/lap"
-            ss = s.get('stdSectors', {}) or {}
-            s1 = ss.get('s1', 0.0); s2 = ss.get('s2', 0.0); s3 = ss.get('s3', 0.0)
-            pretty.append(f"{s.get('compound') or 'UNK'} L{s.get('start')}-{s.get('end')}: avg {avg}, slope {slope_txt}, std(s1/s2/s3)={s1:.3f}/{s2:.3f}/{s3:.3f}")
-        lines.append("\nStints detectados:" )
-        lines.extend([f"- {p}" for p in pretty])
-
-    # Simple climate correlation
-    temps: List[float] = []
-    laps_: List[float] = []
-    for lap in data.telemetry:
-        t = _extract_track_temp(lap)
-        d = getattr(lap, "lapDuration", None)
-        if isinstance(t, (int, float)) and isinstance(d, (int, float)):
-            temps.append(float(t)); laps_.append(float(d))
-    if len(temps) >= 8:
-        # Pearson r
-        r = _linear_slope(temps, laps_) * ( (sum((t - sum(temps)/len(temps))**2 for t in temps) / len(temps)) ** 0.5 )
-        # Above isn't exact Pearson, but slope*std_x approximates covariance/var_x*std_x = cov/std_x = r*std_y
-        # Keep it simple: show monotonic trend via slope of lapDuration vs temp
-        slope_temp = _linear_slope(temps, laps_)
-        lines.append(f"\nClima-ritmo: slope(lapDuration vs trackTemp)={slope_temp:+.4f} s/°C (n={len(temps)})")
-
-    lines.append(
-        "\nInstrucciones de salida: Devuelve SOLO JSON válido con las claves: "
-        "summary, key_findings, strategic_report (race_narrative, next_race_projections). "
-        "No incluyas sugerencias de gráficos."
-    )
-
-    lines.append(
-        "\nReglas estrictas para el análisis (sé específico y accionable):\n"
-        "1) No digas que 'no se puede evaluar' por datos faltantes; infiere con lo disponible.\n"
-        "2) Si existe el campo 'pitStops', úsalo como fuente de verdad (vueltas y duración).\n"
-        "   Si también detectas paradas en el ritmo/compuesto, compara y explica.\n"
-        "3) Identifica stints por compuesto y comenta degradación (tendencia de tiempos por vuelta/sector).\n"
-        "4) Menciona clima solo si hay correlación visible con el ritmo; si falta en algunas vueltas, no bloquea el análisis.\n"
-        "5) Resalta fallas (inconsistencia sectorial, gestión térmica, ejecución de pit) y da 3-5 acciones concretas para la próxima carrera.\n"
-        "6) Usa lenguaje técnico pero claro, sin relleno."
-    )
-
-    return "\n".join(lines)
+    return f"{header}\n\n{csv_header}\n{csv_data}"
 
 
 def _validate_output(payload: Dict[str, Any]) -> AIOutput:
@@ -335,6 +360,14 @@ def analyze_telemetry(data: TelemetryInput) -> Dict[str, Any]:
         )
     except Exception as e:
         raise RuntimeError(f"Error llamando a Groq: {e}")
+
+    # Print token usage
+    if hasattr(completion, "usage"):
+        usage = completion.usage
+        prompt_tokens = getattr(usage, "prompt_tokens", 0)
+        completion_tokens = getattr(usage, "completion_tokens", 0)
+        total_tokens = getattr(usage, "total_tokens", 0)
+        print(f"TOKENS_USAGE | prompt_tokens={prompt_tokens} | completion_tokens={completion_tokens} | total_tokens={total_tokens}")
 
     try:
         content = completion.choices[0].message.content  # type: ignore[index]
