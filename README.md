@@ -1,6 +1,6 @@
 # F1 Race Engineer AI (FastAPI + Groq)
 
-A Python microservice that ingests processed F1 telemetry JSON (from your NestJS backend) and returns a strictly-JSON strategic race analysis using Groq (`llama-3.1-8b-instant`).
+A Python microservice that ingests processed F1 telemetry JSON (from your NestJS backend) and returns a strictly-JSON strategic race analysis using Groq (`openai/gpt-oss-20b`).
 
 ## Technologies
 - FastAPI — HTTP server + OpenAPI/Swagger UI

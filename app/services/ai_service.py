@@ -349,13 +349,18 @@ def analyze_telemetry(data: TelemetryInput) -> Dict[str, Any]:
 
     try:
         completion = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
+            # llama-3.1-8b-instant fue discontinuado por Groq -- gpt-oss-20b es el reemplazo
+            # más cercano en tamaño/velocidad que sigue disponible. Es un modelo de razonamiento
+            # (gasta tokens en un campo "reasoning" separado antes del JSON final), por eso
+            # max_tokens subió de 1200 a 2000 -- con el límite viejo el razonamiento se comía
+            # el presupuesto antes de llegar al JSON real.
+            model="openai/gpt-oss-20b",
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.2,
-            max_tokens=1200,
+            max_tokens=2000,
             response_format={"type": "json_object"},
         )
     except Exception as e:

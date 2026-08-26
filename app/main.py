@@ -15,7 +15,7 @@ app = FastAPI(
     version="0.1.0",
     description=(
         "FastAPI microservice that consumes a processed telemetry JSON and returns a strategic, "
-        "race-engineering analysis via Groq (llama-3.1-8b-instant).\n\n"
+        "race-engineering analysis via Groq (openai/gpt-oss-20b).\n\n"
         "Input JSON supports: \n"
         "- raceSummary: { totalLaps?, totalStops?/totalPitStops?, compounds?/compoundsUsed? }\n"
         "- pitStops: [ { lapNumber, duration?, totalDuration? } ] (optional but preferred for accuracy)\n"
