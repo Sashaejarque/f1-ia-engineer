@@ -368,7 +368,10 @@ def analyze_telemetry(data: TelemetryInput) -> Dict[str, Any]:
                     {"role": "user", "content": user_prompt},
                 ],
                 temperature=0.2,
-                max_tokens=2000,
+                # 2000 se quedaba corto para carreras largas (más vueltas/paradas -> prompt
+                # más largo -> menos presupuesto para razonamiento + JSON) -- Groq devolvía
+                # json_validate_failed con failed_generation vacío, señal de truncamiento.
+                max_tokens=4096,
                 response_format={"type": "json_object"},
             )
         except Exception as e:
