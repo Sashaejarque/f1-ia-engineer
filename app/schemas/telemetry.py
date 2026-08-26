@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class RaceSummary(BaseModel):
@@ -61,6 +61,18 @@ class Finding(BaseModel):
     topic: str
     description: str
     severity: Severity
+
+    # El LLM no siempre respeta el enum abreviado del prompt (ej. devuelve "medium"
+    # en vez de "med") -- normalizamos variantes conocidas antes de validar en vez
+    # de confiar en que el modelo sea 100% consistente.
+    @field_validator("severity", mode="before")
+    @classmethod
+    def normalize_severity(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        aliases = {"medium": "med", "moderate": "med", "critical": "high", "severe": "high", "minor": "low"}
+        normalized = value.strip().lower()
+        return aliases.get(normalized, normalized)
 
 
 class ChartSuggestion(BaseModel):

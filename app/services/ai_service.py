@@ -13,7 +13,8 @@ SYSTEM_PROMPT = (
     "Role: F1 Strategy Chief. Be specific, use available data (avoid 'cannot evaluate'). Provide technical insights on thermal degradation, pit windows, sector consistency, weather impact. "
     "If pitStops present, treat as truth (lap numbers & durations). "
     "Apply engineering inference for gaps; avoid conjecture. "
-    "Output ONLY valid JSON: {\"summary\":string, \"key_findings\":[{\"topic\":string, \"description\":string, \"severity\":\"low|med|high\"}], \"strategic_report\":{\"race_narrative\":string, \"next_race_projections\":string}}"
+    "Output ONLY valid JSON: {\"summary\":string, \"key_findings\":[{\"topic\":string, \"description\":string, \"severity\":\"low|med|high\"}], \"strategic_report\":{\"race_narrative\":string, \"next_race_projections\":string}}. "
+    "severity must be EXACTLY one of the three literal strings low, med, high -- never write out 'medium', 'moderate', 'critical' or any other word."
 )
 
 
@@ -347,42 +348,47 @@ def analyze_telemetry(data: TelemetryInput) -> Dict[str, Any]:
     _normalize_sectors(data)
     user_prompt = _build_user_prompt(data)
 
-    try:
-        completion = client.chat.completions.create(
-            # llama-3.1-8b-instant fue discontinuado por Groq -- gpt-oss-20b es el reemplazo
-            # más cercano en tamaño/velocidad que sigue disponible. Es un modelo de razonamiento
-            # (gasta tokens en un campo "reasoning" separado antes del JSON final), por eso
-            # max_tokens subió de 1200 a 2000 -- con el límite viejo el razonamiento se comía
-            # el presupuesto antes de llegar al JSON real.
-            model="openai/gpt-oss-20b",
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0.2,
-            max_tokens=2000,
-            response_format={"type": "json_object"},
-        )
-    except Exception as e:
-        raise RuntimeError(f"Error llamando a Groq: {e}")
+    # gpt-oss-20b en json_object mode casi siempre respeta el schema, pero no siempre --
+    # es una salida no determinística de un LLM, no una API tipada. Reintentamos toda la
+    # llamada (no solo el parseo) un par de veces ante un JSON inválido o que no valida
+    # contra AIOutput, antes de darnos por vencidos.
+    last_error: Exception | None = None
+    for attempt in range(3):
+        try:
+            completion = client.chat.completions.create(
+                # llama-3.1-8b-instant fue discontinuado por Groq -- gpt-oss-20b es el
+                # reemplazo más cercano en tamaño/velocidad que sigue disponible. Es un
+                # modelo de razonamiento (gasta tokens en un campo "reasoning" separado
+                # antes del JSON final), por eso max_tokens subió de 1200 a 2000 -- con el
+                # límite viejo el razonamiento se comía el presupuesto antes de llegar al
+                # JSON real.
+                model="openai/gpt-oss-20b",
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.2,
+                max_tokens=2000,
+                response_format={"type": "json_object"},
+            )
+        except Exception as e:
+            last_error = RuntimeError(f"Error llamando a Groq: {e}")
+            continue
 
-    # Print token usage
-    if hasattr(completion, "usage"):
-        usage = completion.usage
-        prompt_tokens = getattr(usage, "prompt_tokens", 0)
-        completion_tokens = getattr(usage, "completion_tokens", 0)
-        total_tokens = getattr(usage, "total_tokens", 0)
-        print(f"TOKENS_USAGE | prompt_tokens={prompt_tokens} | completion_tokens={completion_tokens} | total_tokens={total_tokens}")
+        if hasattr(completion, "usage"):
+            usage = completion.usage
+            prompt_tokens = getattr(usage, "prompt_tokens", 0)
+            completion_tokens = getattr(usage, "completion_tokens", 0)
+            total_tokens = getattr(usage, "total_tokens", 0)
+            print(f"TOKENS_USAGE | attempt={attempt + 1} | prompt_tokens={prompt_tokens} | completion_tokens={completion_tokens} | total_tokens={total_tokens}")
 
-    try:
-        content = completion.choices[0].message.content  # type: ignore[index]
-    except Exception:
-        raise RuntimeError("Respuesta de Groq incompleta o sin contenido.")
+        try:
+            content = completion.choices[0].message.content  # type: ignore[index]
+            parsed = json.loads(content)
+            output = _validate_output(parsed)
+            return output.to_dict()
+        except Exception as e:
+            last_error = e
+            continue
 
-    try:
-        parsed = json.loads(content)
-    except Exception as e:
-        raise RuntimeError(f"No se pudo parsear el JSON de Groq: {e}")
-
-    output = _validate_output(parsed)
-    return output.to_dict()
+    raise RuntimeError(f"Groq no devolvió una salida válida tras 3 intentos: {last_error}")
