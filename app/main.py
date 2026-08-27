@@ -4,7 +4,9 @@ from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 
 from app.schemas.telemetry import TelemetryInput, AIOutput
+from app.schemas.race_overview import RaceOverviewInput
 from app.services.ai_service import analyze_telemetry
+from app.services.race_overview_service import analyze_race
 from app.dependencies import verify_internal_secret
 
 
@@ -57,6 +59,47 @@ async def analyze(
 ):
     try:
         result = analyze_telemetry(payload)
+        return JSONResponse(content=result)
+    except HTTPException:
+        raise
+    except RuntimeError as re:
+        raise HTTPException(status_code=502, detail=str(re))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error inesperado: {e}")
+
+
+@app.post("/analyze-race", response_model=AIOutput, tags=["analysis"])
+async def analyze_race_endpoint(
+    payload: RaceOverviewInput = Body(
+        ...,
+        examples={
+            "minimal": {
+                "summary": "Clasificación compacta de 4 pilotos con estrategia y clima",
+                "value": {
+                    "sessionKey": 11353,
+                    "circuitShortName": "Monza",
+                    "year": 2026,
+                    "classification": [
+                        {"driverNumber": 1, "fullName": "Max Verstappen", "teamName": "Red Bull Racing", "position": 1, "points": 25.0, "dnf": False, "gapToLeader": "0.000"},
+                        {"driverNumber": 16, "fullName": "Charles Leclerc", "teamName": "Ferrari", "position": 2, "points": 18.0, "dnf": False, "gapToLeader": "+5.421"},
+                        {"driverNumber": 4, "fullName": "Lando Norris", "teamName": "McLaren", "position": 3, "points": 15.0, "dnf": False, "gapToLeader": "+12.883"},
+                        {"driverNumber": 55, "fullName": "Carlos Sainz", "teamName": "Ferrari", "position": None, "points": 0.0, "dnf": True, "gapToLeader": None}
+                    ],
+                    "strategies": [
+                        {"driverNumber": 1, "pitStopCount": 1, "compoundSequence": ["MEDIUM", "HARD"]},
+                        {"driverNumber": 16, "pitStopCount": 2, "compoundSequence": ["MEDIUM", "HARD", "SOFT"]},
+                        {"driverNumber": 4, "pitStopCount": 1, "compoundSequence": ["MEDIUM", "HARD"]},
+                        {"driverNumber": 55, "pitStopCount": 0, "compoundSequence": ["MEDIUM"]}
+                    ],
+                    "weather": {"airTempStart": 24.1, "airTempEnd": 26.3, "trackTempStart": 31.4, "trackTempEnd": 35.0, "rained": False}
+                }
+            }
+        }
+    ),
+    _: str = Depends(verify_internal_secret)
+):
+    try:
+        result = analyze_race(payload)
         return JSONResponse(content=result)
     except HTTPException:
         raise
