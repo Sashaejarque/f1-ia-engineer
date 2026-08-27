@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import List, Optional, Union
 
 from pydantic import BaseModel
 
@@ -8,11 +8,15 @@ from pydantic import BaseModel
 class DriverClassification(BaseModel):
     driverNumber: int
     fullName: str
-    teamName: str
+    # Optional: un piloto que corrió carreras anteriores del año pero ya no está en el
+    # roster vigente (ej. reemplazado a mitad de temporada) no tiene team_name en /drivers.
+    teamName: Optional[str] = None
     position: Optional[int] = None  # None = no clasificó / DNF
     points: float = 0.0
     dnf: bool = False
-    gapToLeader: Optional[str] = None
+    # OpenF1 devuelve gap_to_leader como número (segundos) para la mayoría, pero como
+    # string ("+1 LAP", "+2 LAPS") para pilotos que quedaron vueltas atrás.
+    gapToLeader: Optional[Union[str, float]] = None
 
 
 class DriverStrategy(BaseModel):
