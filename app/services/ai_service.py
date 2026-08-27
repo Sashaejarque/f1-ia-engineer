@@ -13,6 +13,7 @@ SYSTEM_PROMPT = (
     "Role: F1 Strategy Chief. Be specific, use available data (avoid 'cannot evaluate'). Provide technical insights on thermal degradation, pit windows, sector consistency, weather impact. "
     "If pitStops present, treat as truth (lap numbers & durations). "
     "Apply engineering inference for gaps; avoid conjecture. "
+    "If a 'Precedent' section is present, it's a real past race with similar characteristics (retrieved by feature similarity, not invented) -- use it as a genuine point of comparison in your analysis when relevant, don't ignore it. "
     "Output ONLY valid JSON: {\"summary\":string, \"key_findings\":[{\"topic\":string, \"description\":string, \"severity\":\"low|med|high\"}], \"strategic_report\":{\"race_narrative\":string, \"next_race_projections\":string}}. "
     "severity must be EXACTLY one of the three literal strings low, med, high -- never write out 'medium', 'moderate', 'critical' or any other word."
 )
@@ -325,7 +326,51 @@ def _build_user_prompt(data: TelemetryInput) -> str:
     csv_data = _telemetry_to_csv(data)
     csv_header = "Data (CSV): Lap,Time,S1,S2,S3,C(M/H/S/I),Tmp(=same)"
 
-    return f"{header}\n\n{csv_header}\n{csv_data}"
+    precedent_block = ""
+    precedent = getattr(data, "precedent", None)
+    if precedent is not None:
+        circuit = getattr(precedent, "circuitShortName", None) or "unknown circuit"
+        similarity = getattr(precedent, "similarity", None)
+        sim_str = f"{similarity:.2f}" if isinstance(similarity, (int, float)) else "n/a"
+        pit_count = getattr(precedent, "pitStopCount", None)
+        compounds = getattr(precedent, "compoundSequence", None) or []
+        prior_summary = getattr(precedent, "summary", None) or "(sin resumen)"
+        precedent_block = (
+            f"\n\nPrecedent (most similar past race, similarity={sim_str}): {circuit}, "
+            f"{pit_count} stops, compounds {compounds}. Prior analysis said: \"{prior_summary}\""
+        )
+
+    return f"{header}\n\n{csv_header}\n{csv_data}{precedent_block}"
+
+
+# RAG-PLAN.md Etapa 2: vector de features para comparar carreras entre sí -- no se le pide
+# esto al LLM (es determinístico, no algo para que "razone"), se calcula acá con la misma
+# lógica que ya arma _derived_stats/_stint_summaries para el prompt, y f1-data-bc lo guarda
+# junto al análisis para poder buscar precedentes por similitud coseno más adelante.
+def _extract_features(data: TelemetryInput) -> Dict[str, Any]:
+    derived = _derived_stats(data)
+    stints = _stint_summaries(data, derived)
+
+    compound_sequence = [s["compound"] for s in stints if s.get("compound")]
+    slopes = [s["slopeSecPerLap"] for s in stints if isinstance(s.get("slopeSecPerLap"), (int, float))]
+    avg_degradation_slope = (sum(slopes) / len(slopes)) if slopes else 0.0
+
+    track_temps: List[float] = []
+    for lap in data.telemetry:
+        t = _extract_track_temp(lap)
+        if isinstance(t, (int, float)):
+            track_temps.append(float(t))
+    track_temp_delta = (track_temps[-1] - track_temps[0]) if len(track_temps) >= 2 else 0.0
+
+    pit_laps = derived["pit_stop_laps"]
+
+    return {
+        "pitStopCount": derived["pit_stop_count_detected"],
+        "firstPitLap": pit_laps[0] if pit_laps else None,
+        "compoundSequence": compound_sequence,
+        "trackTempDelta": round(track_temp_delta, 2),
+        "avgDegradationSlope": round(avg_degradation_slope, 4),
+    }
 
 
 def _validate_output(payload: Dict[str, Any]) -> AIOutput:
@@ -389,7 +434,9 @@ def analyze_telemetry(data: TelemetryInput) -> Dict[str, Any]:
             content = completion.choices[0].message.content  # type: ignore[index]
             parsed = json.loads(content)
             output = _validate_output(parsed)
-            return output.to_dict()
+            result = output.to_dict()
+            result["features"] = _extract_features(data)
+            return result
         except Exception as e:
             last_error = e
             continue
