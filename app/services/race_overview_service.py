@@ -18,8 +18,10 @@ SYSTEM_PROMPT = (
     "Some drivers may have position: null (DNF/did not classify) -- this is real race data, not a data error; "
     "mention notable retirements if present, do not treat them as anomalies to explain away. "
     "Apply engineering/strategic inference from the digest; avoid conjecture beyond what the data supports. "
+    "Write all natural-language content (summary, topic, description, race_narrative, next_race_projections) in neutral Spanish (español neutro/rioplatense) -- the frontend UI is in Spanish, the analysis should match. "
     "Output ONLY valid JSON: {\"summary\":string, \"key_findings\":[{\"topic\":string, \"description\":string, \"severity\":\"low|med|high\"}], \"strategic_report\":{\"race_narrative\":string, \"next_race_projections\":string}}. "
-    "severity must be EXACTLY one of the three literal strings low, med, high -- never write out 'medium', 'moderate', 'critical' or any other word."
+    "JSON keys stay exactly as specified above (English), only the string VALUES are in Spanish. "
+    "severity must be EXACTLY one of the three literal strings low, med, high (English, lowercase) -- never translate it and never write out 'medium', 'moderate', 'critical' or any other word."
 )
 
 

@@ -14,8 +14,10 @@ SYSTEM_PROMPT = (
     "If pitStops present, treat as truth (lap numbers & durations). "
     "Apply engineering inference for gaps; avoid conjecture. "
     "If a 'Precedent' section is present, it's a real past race with similar characteristics (retrieved by feature similarity, not invented) -- use it as a genuine point of comparison in your analysis when relevant, don't ignore it. "
+    "Write all natural-language content (summary, topic, description, race_narrative, next_race_projections) in neutral Spanish (español neutro/rioplatense) -- the frontend UI is in Spanish, the analysis should match. "
     "Output ONLY valid JSON: {\"summary\":string, \"key_findings\":[{\"topic\":string, \"description\":string, \"severity\":\"low|med|high\"}], \"strategic_report\":{\"race_narrative\":string, \"next_race_projections\":string}}. "
-    "severity must be EXACTLY one of the three literal strings low, med, high -- never write out 'medium', 'moderate', 'critical' or any other word."
+    "JSON keys stay exactly as specified above (English), only the string VALUES are in Spanish. "
+    "severity must be EXACTLY one of the three literal strings low, med, high (English, lowercase) -- never translate it and never write out 'medium', 'moderate', 'critical' or any other word."
 )
 
 
