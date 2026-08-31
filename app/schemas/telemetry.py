@@ -44,10 +44,24 @@ class PitStop(BaseModel):
         extra = "allow"
 
 
+class Precedent(BaseModel):
+    """Resumen compacto de la carrera pasada más parecida (RAG por vector de features,
+    calculado y elegido en f1-data-bc antes de llamar acá -- ver docs/RAG-PLAN.md)."""
+    circuitShortName: Optional[str] = None
+    similarity: Optional[float] = None
+    pitStopCount: Optional[int] = None
+    compoundSequence: List[str] = Field(default_factory=list)
+    summary: Optional[str] = None
+
+    class Config:
+        extra = "allow"
+
+
 class TelemetryInput(BaseModel):
     raceSummary: RaceSummary
     telemetry: List[TelemetryLap]
     pitStops: Optional[List[PitStop]] = None
+    precedent: Optional[Precedent] = None
     class Config:
         extra = "allow"
 

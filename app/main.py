@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 
 from app.schemas.telemetry import TelemetryInput, AIOutput
 from app.schemas.race_overview import RaceOverviewInput
-from app.services.ai_service import analyze_telemetry
+from app.services.ai_service import analyze_telemetry, _extract_features
 from app.services.race_overview_service import analyze_race
 from app.dependencies import verify_internal_secret
 
@@ -107,3 +107,19 @@ async def analyze_race_endpoint(
         raise HTTPException(status_code=502, detail=str(re))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error inesperado: {e}")
+
+
+@app.post("/extract-features", tags=["analysis"])
+async def extract_features(
+    payload: TelemetryInput = Body(...),
+    _: str = Depends(verify_internal_secret),
+):
+    """
+    Vector de features de una telemetría, sin llamar a la IA -- cómputo determinístico
+    (paradas, gomas, degradación) usado por f1-data-bc para buscar precedentes similares
+    antes de pedir el análisis real. Ver docs/RAG-PLAN.md, Etapas 2-3.
+    """
+    try:
+        return _extract_features(payload)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error extrayendo features: {e}")
